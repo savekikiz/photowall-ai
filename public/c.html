@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>PhotoWall AI</title>
+<link rel="stylesheet" href="/app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📸</text></svg>">
+</head>
+<body>
+<div class="wrap">
+  <h1 id="title">กำลังโหลด…</h1>
+  <p class="muted" id="desc"></p>
+
+  <div class="tabs">
+    <a href="#create" id="tab-create">สร้างภาพของฉัน</a>
+    <a href="#gallery" id="tab-gallery">รวมภาพในงาน</a>
+  </div>
+
+  <section id="view-create">
+    <div class="notice">ภาพที่สร้างจะขึ้นบนจอใหญ่หน้าห้องและหน้ารวมภาพ ใครมีลิงก์ก็เห็นได้ ถ้าไม่สะดวกโปรดข้ามกิจกรรมนี้</div>
+
+    <form id="form" class="card">
+      <label>ชื่อของคุณ <span class="hint">(ไม่ใส่ก็ได้)</span></label>
+      <input type="text" id="name" maxlength="80" placeholder="เช่น ทอม">
+
+      <label>1) รูปของคุณ <span class="hint">จำเป็น — ใช้เป็นหน้าตาในโปสเตอร์</span></label>
+      <div class="drop" id="drop">
+        <div id="drop-empty">
+          <div style="font-size:2rem">📷</div>
+          <div>แตะเพื่อถ่ายรูปหรือเลือกรูป</div>
+          <div class="hint">png / jpg / webp</div>
+        </div>
+        <img id="preview" hidden alt="รูปที่เลือก">
+      </div>
+      <input type="file" id="file" accept="image/png,image/jpeg,image/webp" hidden>
+
+      <label>2) วันนี้คุณได้เรียนรู้อะไร <span class="hint">บรรทัดละ 1 ข้อ</span></label>
+      <textarea id="learnings" placeholder="เข้าใจ agent workflow&#10;รู้วิธีเขียน prompt ที่ใช้งานได้จริง"></textarea>
+
+      <label>3) จะเอาไปทำอะไรต่อ <span class="hint">บรรทัดละ 1 ข้อ</span></label>
+      <textarea id="commitments" placeholder="ทำ dashboard ให้ทีม&#10;ลดเวลาสรุปรายงานเหลือครึ่งเดียว"></textarea>
+
+      <label>4) เลือกธีมภาพ</label>
+      <div class="themes" id="themes"></div>
+
+      <div id="formerr"></div>
+      <div class="row" style="margin-top:18px">
+        <button type="submit" id="submit">สร้างโปสเตอร์ของฉัน</button>
+      </div>
+    </form>
+
+    <div class="card" id="working" hidden style="text-align:center">
+      <div class="spinner"></div>
+      <b>กำลังสร้างภาพ…</b>
+      <p class="muted">ใช้เวลาประมาณ 30 ถึง 120 วินาที อย่าปิดหน้านี้<br><span id="elapsed">0</span> วินาที</p>
+    </div>
+
+    <div class="card" id="result" hidden style="text-align:center">
+      <div class="ok" id="resultnote">เสร็จแล้ว! ภาพของคุณขึ้นจอใหญ่เรียบร้อย</div>
+      <img class="poster" id="poster" alt="โปสเตอร์ของคุณ">
+      <div class="row" style="justify-content:center;margin-top:14px">
+        <a id="download" download><button type="button">ดาวน์โหลดภาพ</button></a>
+        <button type="button" class="ghost" id="again">สร้างใหม่อีกใบ</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="view-gallery" hidden>
+    <h2>รวมภาพในงานนี้ <span class="pill" id="count">0 ภาพ</span></h2>
+    <div class="grid" id="grid"></div>
+    <p class="muted" id="empty" hidden>ยังไม่มีใครส่งภาพ เป็นคนแรกเลย!</p>
+  </section>
+</div>
+
+<script>
+const slug = decodeURIComponent(location.pathname.replace(/^\/c\//,'').replace(/\/$/,''));
+let THEMES = [], selected = null, photoData = null, pollTimer = null, tick = null;
+
+const $ = id => document.getElementById(id);
+
+function showTab(){
+  const g = location.hash === '#gallery';
+  $('view-create').hidden = g;
+  $('view-gallery').hidden = !g;
+  $('tab-create').className = g ? '' : 'on';
+  $('tab-gallery').className = g ? 'on' : '';
+  if (g) loadGallery();
+}
+addEventListener('hashchange', showTab);
+
+async function init(){
+  try {
+    const r = await fetch('/api/campaigns/' + encodeURIComponent(slug));
+    if (!r.ok) throw new Error('ไม่พบงานชื่อ "' + slug + '"');
+    const { campaign } = await r.json();
+    $('title').textContent = campaign.title;
+    $('desc').textContent = campaign.description || '';
+    document.title = campaign.title + ' — PhotoWall';
+  } catch (e) {
+    $('title').textContent = 'ไม่พบงานนี้';
+    $('desc').textContent = 'ตรวจสอบลิงก์อีกครั้ง หรือให้ผู้จัดงานสร้างงานในหน้า /admin ก่อน';
+    $('form').hidden = true;
+    return;
+  }
+  const { themes } = await (await fetch('/api/themes')).json();
+  THEMES = themes;
+  $('themes').innerHTML = themes.map(t =>
+    `<div class="theme" data-id="${t.id}"><b>${t.name}</b><span>${t.tagline}</span></div>`).join('');
+  $('themes').querySelectorAll('.theme').forEach(el => el.onclick = () => {
+    selected = el.dataset.id;
+    $('themes').querySelectorAll('.theme').forEach(x => x.classList.remove('sel'));
+    el.classList.add('sel');
+  });
+  $('themes').firstElementChild.click();
+  showTab();
+}
+
+// ---- photo pick + downscale (longest side ~1600px, quality 0.88)
+$('drop').onclick = () => $('file').click();
+$('file').onchange = async e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  try {
+    photoData = await shrink(f);
+    $('preview').src = photoData;
+    $('preview').hidden = false;
+    $('drop-empty').hidden = true;
+    $('drop').classList.add('has');
+  } catch (err) { showErr('อ่านไฟล์รูปไม่สำเร็จ: ' + err.message); }
+};
+
+function shrink(file){
+  return new Promise((res, rej) => {
+    const img = new Image(), url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const max = 1600, s = Math.min(1, max / Math.max(img.width, img.height));
+      const cv = document.createElement('canvas');
+      cv.width = Math.round(img.width * s); cv.height = Math.round(img.height * s);
+      cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+      res(cv.toDataURL('image/jpeg', 0.88));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); rej(new Error('ไฟล์ไม่ใช่รูปภาพ')); };
+    img.src = url;
+  });
+}
+
+function showErr(msg){ $('formerr').innerHTML = '<div class="err">' + msg + '</div>'; }
+const lines = id => $(id).value.split('\n').map(s => s.trim()).filter(Boolean);
+
+$('form').onsubmit = async e => {
+  e.preventDefault();
+  $('formerr').innerHTML = '';
+  if (!photoData) return showErr('ต้องแนบรูปก่อนถึงจะสร้างภาพได้');
+  if (!lines('learnings').length) return showErr('เขียนสิ่งที่ได้เรียนรู้อย่างน้อย 1 ข้อ');
+  if (!lines('commitments').length) return showErr('เขียนสิ่งที่จะเอาไปทำต่ออย่างน้อย 1 ข้อ');
+  if (!selected) return showErr('เลือกธีมภาพก่อน');
+
+  $('submit').disabled = true;
+  const payload = {
+    campaign_slug: slug, student_name: $('name').value.trim(),
+    learnings: lines('learnings'), commitments: lines('commitments'),
+    theme_id: selected, photoData,
+  };
+  let r, data;
+  try {
+    r = await fetch('/api/submissions', {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload)
+    });
+    data = await r.json();
+  } catch (err) {
+    $('submit').disabled = false;
+    return showErr('ส่งข้อมูลไม่สำเร็จ: ' + err.message);
+  }
+  if (!r.ok) { $('submit').disabled = false; return showErr(data.error || ('ผิดพลาด ' + r.status)); }
+
+  $('form').hidden = true;
+  $('working').hidden = false;
+  let sec = 0;
+  tick = setInterval(() => { sec += 1; $('elapsed').textContent = sec; }, 1000);
+  poll(data.id);
+};
+
+function poll(id){
+  const started = Date.now();
+  pollTimer = setInterval(async () => {
+    try {
+      const s = await (await fetch('/api/submissions/' + id)).json();
+      if (s.status === 'done' || s.status === 'fallback_mock') return finish(s);
+      if (s.status === 'error') return fail(s.error || 'สร้างภาพไม่สำเร็จ');
+      if (Date.now() - started > 15 * 60 * 1000) return fail('ใช้เวลานานผิดปกติ ลองใหม่อีกครั้ง');
+    } catch (e) { /* keep polling through a blip */ }
+  }, 3000);
+}
+
+function stopTimers(){ clearInterval(pollTimer); clearInterval(tick); }
+
+function finish(s){
+  stopTimers();
+  $('working').hidden = true;
+  $('result').hidden = false;
+  $('poster').src = s.imageUrl;
+  $('download').href = s.imageUrl;
+  $('download').setAttribute('download', s.id + '.png');
+  if (s.status === 'fallback_mock') {
+    $('resultnote').className = 'notice';
+    $('resultnote').textContent = 'สร้างด้วย AI ไม่สำเร็จ จึงใช้ภาพสำรองแทน: ' + (s.error || '');
+  }
+}
+
+function fail(msg){
+  stopTimers();
+  $('working').hidden = true;
+  $('form').hidden = false;
+  $('submit').disabled = false;
+  showErr(msg);
+}
+
+$('again').onclick = () => {
+  $('result').hidden = true;
+  $('form').hidden = false;
+  $('submit').disabled = false;
+  $('preview').hidden = true; $('drop-empty').hidden = false;
+  $('drop').classList.remove('has'); photoData = null; $('file').value = '';
+};
+
+async function loadGallery(){
+  try {
+    const { submissions } = await (await fetch('/api/submissions?campaign=' + encodeURIComponent(slug))).json();
+    $('count').textContent = submissions.length + ' ภาพ';
+    $('empty').hidden = submissions.length > 0;
+    $('grid').innerHTML = submissions.map(s => `
+      <div class="tile">
+        <a href="${s.imageUrl}" target="_blank" rel="noopener"><img src="${s.imageUrl}" loading="lazy" alt=""></a>
+        <div class="meta"><b>${esc(s.student_name) || 'ไม่ระบุชื่อ'}</b>
+        <span class="muted">${esc((s.learnings||[])[0] || '')}</span></div>
+      </div>`).join('');
+  } catch (e) { $('grid').innerHTML = '<div class="err">โหลดรูปไม่สำเร็จ</div>'; }
+}
+const esc = s => (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+setInterval(() => { if (location.hash === '#gallery') loadGallery(); }, 10000);
+init();
+</script>
+</body>
+</html>

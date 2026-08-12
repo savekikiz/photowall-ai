@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PhotoWall — หลังบ้าน</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div class="wrap wide">
+  <h1>หลังบ้าน PhotoWall</h1>
+  <p class="muted">สร้างงานใหม่ แล้วเอาลิงก์ไปทำ QR ให้ผู้เข้าร่วมสแกน</p>
+
+  <div class="card">
+    <label>รหัสผู้ดูแล (ADMIN_TOKEN) <span class="hint">เก็บไว้ในเครื่องนี้เท่านั้น</span></label>
+    <div class="row">
+      <input type="password" id="token" placeholder="วางรหัสที่ตั้งไว้ใน .env" style="flex:1;min-width:220px">
+      <button class="ghost" id="save">จำรหัสไว้</button>
+    </div>
+    <div id="authmsg"></div>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0">สร้างงานใหม่</h2>
+    <label>ชื่องาน</label>
+    <input type="text" id="title" placeholder="AI Workshop รุ่น 12">
+    <label>ลิงก์ย่อ (slug) <span class="hint">เว้นว่างได้ ระบบตั้งให้เอง — ใช้ a-z 0-9 และ -</span></label>
+    <input type="text" id="slug" placeholder="workshop-12">
+    <label>คำอธิบายสั้นๆ <span class="hint">ไม่ใส่ก็ได้</span></label>
+    <input type="text" id="desc" placeholder="ปิดคลาส 12 ส.ค. 2569">
+    <div id="msg"></div>
+    <div class="row" style="margin-top:14px"><button id="create">สร้างงาน</button></div>
+  </div>
+
+  <h2>งานทั้งหมด</h2>
+  <div id="list"><p class="muted">ใส่รหัสผู้ดูแลเพื่อดูรายการ</p></div>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+$('token').value = localStorage.getItem('pw_admin_token') || '';
+const hdr = () => ({'Content-Type':'application/json','X-Admin-Token':$('token').value.trim()});
+
+$('save').onclick = () => { localStorage.setItem('pw_admin_token', $('token').value.trim()); load(); };
+
+$('create').onclick = async () => {
+  $('msg').innerHTML = '';
+  const title = $('title').value.trim();
+  if (!title) return $('msg').innerHTML = '<div class="err">ต้องใส่ชื่องาน</div>';
+  const r = await fetch('/api/campaigns', {method:'POST', headers: hdr(),
+    body: JSON.stringify({title, slug: $('slug').value.trim(), description: $('desc').value.trim()})});
+  const d = await r.json();
+  if (!r.ok) return $('msg').innerHTML = '<div class="err">' + (d.error || r.status) + '</div>';
+  $('msg').innerHTML = '<div class="ok">สร้างงาน "' + esc(d.campaign.title) + '" แล้ว</div>';
+  $('title').value = $('slug').value = $('desc').value = '';
+  load();
+};
+
+async function load(){
+  const t = $('token').value.trim();
+  if (!t) return;
+  const r = await fetch('/api/campaigns', {headers: hdr()});
+  if (r.status === 401) return $('list').innerHTML = '<div class="err">รหัสผู้ดูแลไม่ถูกต้อง</div>';
+  const { campaigns } = await r.json();
+  if (!campaigns.length) return $('list').innerHTML = '<p class="muted">ยังไม่มีงาน</p>';
+  $('list').innerHTML = campaigns.slice().reverse().map(c => `
+    <div class="card">
+      <b>${esc(c.title)}</b> <span class="pill">${esc(c.slug)}</span>
+      <p class="muted">${esc(c.description || '')} · สร้างเมื่อ ${esc(c.created_at)}</p>
+      <div class="row">
+        <a href="/c/${encodeURIComponent(c.slug)}" target="_blank">หน้าผู้เข้าร่วม</a>
+        <a href="/c/${encodeURIComponent(c.slug)}#gallery" target="_blank">หน้ารวมภาพ</a>
+        <a href="/wall.html?c=${encodeURIComponent(c.slug)}" target="_blank">จอใหญ่</a>
+      </div>
+      <p class="muted" style="margin-top:8px">ลิงก์สำหรับทำ QR: <code>${location.origin}/c/${esc(c.slug)}</code></p>
+    </div>`).join('');
+}
+const esc = s => (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+load();
+</script>
+</body>
+</html>

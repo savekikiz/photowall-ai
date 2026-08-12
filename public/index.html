@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PhotoWall AI</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div class="wrap">
+  <h1>PhotoWall AI 📸</h1>
+  <p class="muted">โปสเตอร์ปิดคลาสที่ AI สร้างให้ทีละคน แล้วขึ้นจอใหญ่พร้อมกันทั้งห้อง</p>
+  <div class="card">
+    <h2 style="margin-top:0">เริ่มยังไง</h2>
+    <p><b>ผู้จัดงาน:</b> ไปที่ <a href="/admin">/admin</a> ใส่รหัสผู้ดูแล แล้วสร้างงานใหม่</p>
+    <p><b>ผู้เข้าร่วม:</b> สแกน QR ที่ผู้จัดงานให้ หรือเปิด <code>/c/ชื่องาน</code></p>
+    <p><b>จอใหญ่:</b> เปิด <code>/wall.html?c=ชื่องาน</code> แล้วกดเต็มจอ</p>
+  </div>
+  <div class="card">
+    <h2 style="margin-top:0">สถานะระบบ</h2>
+    <pre id="h" class="muted">…</pre>
+  </div>
+</div>
+<script>
+fetch('/healthz').then(r => r.json()).then(d => {
+  document.getElementById('h').textContent = JSON.stringify(d, null, 2);
+}).catch(e => document.getElementById('h').textContent = 'ต่อเซิร์ฟเวอร์ไม่ได้');
+</script>
+</body>
+</html>

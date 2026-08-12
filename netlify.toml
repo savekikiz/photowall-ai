@@ -1,0 +1,21 @@
+[build]
+  publish = "public"
+  functions = "netlify/functions"
+  command = "echo 'no build step needed'"
+
+[functions]
+  node_bundler = "esbuild"
+
+# /c/<slug> is one page that reads the slug from the URL
+[[redirects]]
+  from = "/c/*"
+  to = "/c.html"
+  status = 200
+
+[[redirects]]
+  from = "/admin"
+  to = "/admin.html"
+  status = 200
+
+# /healthz, /api/* and /media/* are claimed by netlify/functions/api.mts
+# via its exported `config.path`, so they need no redirect here.

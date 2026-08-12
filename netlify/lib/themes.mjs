@@ -1,0 +1,39 @@
+// GENERATED from themes.json by scripts/sync-themes.mjs -- do not edit by hand.
+export const THEMES = [
+  {
+    "id": "cinematic-graduation",
+    "name": "Cinematic Graduation",
+    "tagline": "โปสเตอร์จบคลาสแบบเท่ มีพลัง และน่าภูมิใจ",
+    "prompt": "cinematic celebratory portrait poster, direct flash, colorful confetti, warm classroom energy, premium editorial poster, inspirational but realistic"
+  },
+  {
+    "id": "future-agent-lab",
+    "name": "Future Agent Lab",
+    "tagline": "ห้องแล็บ AI ล้ำๆ เหมาะกับสายเทค",
+    "prompt": "futuristic AI agent command center, glowing dashboards, friendly robots as assistants, neon blue magenta, optimistic tech lab, high detail"
+  },
+  {
+    "id": "retro-90s-tech",
+    "name": "90s Retro Tech",
+    "tagline": "กลิ่นอายคอมพิวเตอร์ยุค 90s สนุกและจำง่าย",
+    "prompt": "90s retro cartoon tech poster, CRT computers, floppy disks, fax machine, saturated colors, nostalgic playful caricature style, crisp Thai-friendly layout area"
+  },
+  {
+    "id": "street-flash",
+    "name": "Street Flash",
+    "tagline": "ภาพจริงใจแบบสตรีท มีแฟลช สีสด",
+    "prompt": "candid street photography look, direct flash, saturated colors, documentary realism, energetic workshop vibe"
+  },
+  {
+    "id": "thai-inspiration",
+    "name": "Thai Inspiration",
+    "tagline": "อบอุ่น ภูมิใจ เหมาะกับภาพสรุป commitment",
+    "prompt": "warm Thai workshop celebration poster, elegant modern Thai visual motifs, soft golden light, meaningful milestone, premium inspirational learning certificate vibe"
+  },
+  {
+    "id": "maker-sticker-wall",
+    "name": "Maker Sticker Wall",
+    "tagline": "เหมือนบอร์ดไอเดีย สำหรับคนลงมือทำจริง",
+    "prompt": "creative maker wall full of stickers, notes, flowcharts, AI agents doing tasks, playful startup energy, colorful collage poster, clean focal composition"
+  }
+];

@@ -1,0 +1,16 @@
+{
+  "name": "photowall-ai",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "AI closing-class poster wall \u2014 file-based, no database",
+  "scripts": {
+    "sync:themes": "node scripts/sync-themes.mjs",
+    "test:netlify": "node tests/netlify.test.mjs",
+    "test:provider": "node tests/provider_openai.mjs",
+    "test:browser": "node tests/browser.mjs"
+  },
+  "dependencies": {
+    "@netlify/blobs": "^8.1.0"
+  }
+}
