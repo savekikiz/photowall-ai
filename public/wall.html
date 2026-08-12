@@ -3,13 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>PhotoWall — จอใหญ่</title>
+<title>DuckyWall — จอใหญ่</title>
 <link rel="stylesheet" href="/app.css">
+<link rel="icon" href="/favicon.svg">
 <style>
   body{overflow:hidden}
   .stage{height:100vh;display:flex;flex-direction:column}
-  .bar{display:flex;align-items:center;gap:16px;padding:14px 26px;border-bottom:1px solid var(--line);
-       background:rgba(13,15,26,.7);backdrop-filter:blur(8px)}
+  .bar{display:flex;align-items:center;gap:16px;padding:14px 26px;border-bottom:2px solid var(--line);
+       background:rgba(255,251,239,.82);backdrop-filter:blur(8px)}
+  .bar .mark{width:40px;height:40px;flex:none}
   .bar h1{font-size:1.5rem}
   .bar .spacer{flex:1}
   .bar .join{text-align:right;font-size:.95rem;color:var(--muted)}
@@ -17,27 +19,39 @@
   .board{flex:1;overflow:hidden;padding:18px 26px}
   .board .grid{height:100%;grid-template-columns:repeat(var(--cols,4),minmax(0,1fr));
                 grid-auto-rows:minmax(0,1fr);gap:18px}
-  .tile{display:flex;flex-direction:column;min-height:0}
+  /* กริดเปล่ายังกิน height:100% อยู่ ทำให้ .empty ถูกดันตกจอ */
+  .board .grid:empty{display:none}
+  .tile{display:flex;flex-direction:column;min-height:0;position:relative;overflow:visible}
   .tile img{flex:1;min-height:0;width:100%;height:auto;aspect-ratio:auto;object-fit:contain;padding:6px}
   .tile .meta{font-size:1rem;text-align:center}
   .tile{animation:pop .5s ease}
-  .tile.fresh{box-shadow:0 0 0 3px var(--accent),0 0 40px rgba(124,108,255,.5)}
+  .tile.fresh{box-shadow:0 0 0 3px var(--accent-2),0 0 40px rgba(255,158,44,.55)}
+  /* เป็ดจิ๋วเด้งบอกว่ารูปนี้เพิ่งมา */
+  .tile.fresh::after{content:'';position:absolute;top:-12px;right:-10px;width:44px;height:44px;
+    background:#fff url('/duck-tiny.svg') center/32px 32px no-repeat;border:2px solid var(--accent-2);
+    border-radius:50%;animation:duck-pop .4s ease}
+  .empty img{width:132px;height:132px;animation:duck-bob 2.6s ease-in-out infinite}
   @keyframes pop{from{opacity:0;transform:scale(.9)}to{opacity:1;transform:none}}
   .empty{display:flex;height:100%;align-items:center;justify-content:center;flex-direction:column;color:var(--muted)}
-  .empty div:first-child{font-size:4rem}
+  .empty div{font-size:1.4rem}
+  /* ถ้าฉายในห้องมืดแล้วพื้นครีมแยงตา ให้เอาคอมเมนต์ 3 บรรทัดนี้ออกเพื่อสลับเป็นโหมดมืด */
+  /* :root{--bg:#1A1508;--bg-soft:#241E0D;--card:#241E0D;--line:#4A3F1C;--text:#FFF8E1;--muted:#C9B77A} */
+  /* body{background:#1A1508} */
+  /* .bar{background:rgba(26,21,8,.75)} */
 </style>
 </head>
 <body>
 <div class="stage">
   <div class="bar">
-    <h1 id="title">PhotoWall</h1>
+    <img class="mark" src="/duck.svg" alt="" width="40" height="40">
+    <h1 id="title">DuckyWall</h1>
     <span class="pill" id="count">0 ภาพ</span>
     <div class="spacer"></div>
     <div class="join">สแกน QR หรือเปิดลิงก์<br><b id="joinurl"></b></div>
   </div>
   <div class="board">
     <div class="grid" id="grid"></div>
-    <div class="empty" id="empty"><div>📸</div><div>รอภาพแรกจากผู้เข้าร่วม…</div></div>
+    <div class="empty" id="empty"><img src="/duck.svg" alt=""><div>รอภาพแรกจากผู้เข้าร่วม…</div></div>
   </div>
 </div>
 <script>

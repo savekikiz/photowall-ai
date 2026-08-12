@@ -3,12 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>PhotoWall AI</title>
+<title>DuckyWall</title>
 <link rel="stylesheet" href="/app.css">
+<link rel="icon" href="/favicon.svg">
 </head>
 <body>
 <div class="wrap">
-  <h1>PhotoWall AI 📸</h1>
+  <h1><img class="mark" src="/duck.svg" alt="">DuckyWall</h1>
   <p class="muted">โปสเตอร์ปิดคลาสที่ AI สร้างให้ทีละคน แล้วขึ้นจอใหญ่พร้อมกันทั้งห้อง</p>
   <div class="card">
     <h2 style="margin-top:0">เริ่มยังไง</h2>
@@ -20,6 +21,7 @@
     <h2 style="margin-top:0">สถานะระบบ</h2>
     <pre id="h" class="muted">…</pre>
   </div>
+  <p class="by">by Ducky Engineer 🐤</p>
 </div>
 <script>
 fetch('/healthz').then(r => r.json()).then(d => {

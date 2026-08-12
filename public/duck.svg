@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="เป็ดน้อย">
+  <!-- หาง -->
+  <path d="M12 34 L2 27 Q6 37 11 41 Z" fill="#F0B01F"/>
+  <!-- ลำตัว -->
+  <ellipse cx="28" cy="42" rx="22" ry="14" fill="#FFC93C"/>
+  <!-- ท้องอ่อน -->
+  <ellipse cx="30" cy="47" rx="16" ry="8" fill="#FFE08A" opacity=".55"/>
+  <!-- ปีก -->
+  <path d="M19 40 Q29 33 39 41 Q30 51 19 46 Z" fill="#F0B01F"/>
+  <path d="M23 43 Q30 40 35 43" stroke="#E0A210" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+  <!-- คอ + หัว -->
+  <circle cx="44" cy="23" r="13" fill="#FFC93C"/>
+  <!-- ไฮไลต์บนหัว -->
+  <ellipse cx="39" cy="15" rx="6" ry="3.4" fill="#FFE08A" opacity=".85" transform="rotate(-22 39 15)"/>
+  <!-- ปาก -->
+  <path d="M55 19 Q64 21 63 25.5 Q62 30 54 29 Z" fill="#FF9E2C"/>
+  <path d="M56 25.5 Q60 26 62.5 25.5" stroke="#E0771A" stroke-width="1.2" fill="none" stroke-linecap="round"/>
+  <!-- แก้ม -->
+  <circle cx="42" cy="29" r="3.4" fill="#FF9E2C" opacity=".28"/>
+  <!-- ตา -->
+  <circle cx="48" cy="19" r="2.9" fill="#3D2F0B"/>
+  <circle cx="49.1" cy="17.9" r="1" fill="#FFFFFF"/>
+</svg>

@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>PhotoWall AI</title>
+<title>DuckyWall</title>
 <link rel="stylesheet" href="/app.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📸</text></svg>">
+<link rel="icon" href="/favicon.svg">
 </head>
 <body>
 <div class="wrap">
@@ -27,7 +27,7 @@
       <label>1) รูปของคุณ <span class="hint">จำเป็น — ใช้เป็นหน้าตาในโปสเตอร์</span></label>
       <div class="drop" id="drop">
         <div id="drop-empty">
-          <div style="font-size:2rem">📷</div>
+          <img class="mascot" src="/duck.svg" alt="">
           <div>แตะเพื่อถ่ายรูปหรือเลือกรูป</div>
           <div class="hint">png / jpg / webp</div>
         </div>
@@ -96,7 +96,7 @@ async function init(){
     const { campaign } = await r.json();
     $('title').textContent = campaign.title;
     $('desc').textContent = campaign.description || '';
-    document.title = campaign.title + ' — PhotoWall';
+    document.title = campaign.title + ' — DuckyWall';
   } catch (e) {
     $('title').textContent = 'ไม่พบงานนี้';
     $('desc').textContent = 'ตรวจสอบลิงก์อีกครั้ง หรือให้ผู้จัดงานสร้างงานในหน้า /admin ก่อน';
