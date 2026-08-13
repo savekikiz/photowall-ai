@@ -64,7 +64,7 @@ docker compose up --build
    | `IMAGE_MODEL` | `gpt-image-2` |
    | `IMAGE_SIZE` | `1024x1536` |
    | `IMAGE_QUALITY` | `medium` |
-   | `PUBLIC_BASE_URL` | URL ของเว็บคุณ เช่น `https://ชื่อเว็บ.netlify.app` |
+   | `PUBLIC_BASE_URL` | URL ของเว็บคุณ เช่น `https://ชื่อเว็บ.netlify.app` (ใส่ผิดไม่ทำให้สร้างภาพพังแล้ว) |
 
 5. กด **Deploys → Trigger deploy → Deploy site** อีกครั้ง เพื่อให้ค่าใหม่มีผล
 6. เปิด `https://ชื่อเว็บ.netlify.app/healthz` ต้องเห็น `"ok": true` และ `"has_openai_key": true`
@@ -82,7 +82,9 @@ docker compose up --build
 | `IMAGE_PROVIDER` | `mock` หรือ `openai` | เหมือนกัน |
 | `OPENAI_API_KEY` | ใส่เมื่อใช้ `openai` | เหมือนกัน |
 | `IMAGE_MODEL` / `IMAGE_SIZE` / `IMAGE_QUALITY` | `gpt-image-2` / `1024x1536` / `medium` | เหมือนกัน |
-| `PUBLIC_BASE_URL` | ไม่จำเป็น | **ควรใส่** URL เว็บจริง |
+| `IMAGE_TIMEOUT_MS` | ไม่จำเป็น (ค่าเริ่มต้น 120000) | ใส่เมื่ออยากรอนานกว่าเดิม |
+| `IMAGE_MAX_ATTEMPTS` | ไม่จำเป็น (ค่าเริ่มต้น 2) | เพิ่มได้ถ้าโดน 429 บ่อย |
+| `PUBLIC_BASE_URL` | ไม่จำเป็น | ใส่ก็ได้ ใช้แค่ทำลิงก์ — **ไม่มีผลกับการสร้างภาพแล้ว** |
 | `PORT` | ค่าเริ่มต้น 8080 | ไม่ต้องใส่ |
 
 ถ้าไม่มี `OPENAI_API_KEY` ระบบ **ไม่พัง** — จะสร้างภาพสำรองให้ แล้วบันทึกสาเหตุไว้ในสถานะ `fallback_mock`
@@ -98,6 +100,22 @@ docker compose up --build
 3. หน้าเว็บถาม `GET /api/submissions/<id>` ทุก 3 วินาที จนได้ `done` แล้วค่อยโชว์ภาพ
 
 บนเครื่องตัวเองก็ทำแบบเดียวกัน แค่เปลี่ยนจาก background function เป็น thread
+
+### งบเวลา (สำคัญ — ห้ามตั้งให้ทับกัน)
+
+ทุกชั้นต้องสั้นกว่าชั้นที่ครอบมันอยู่ ไม่งั้นเวลาพังจริง ชั้นนอกจะรายงานแทนทั้งที่ไม่รู้ว่าเกิดอะไรขึ้น
+กลายเป็น "รอนานมากแล้วได้ error กลางๆ" แทนที่จะรู้สาเหตุตั้งแต่ต้น
+
+| ชั้น | เวลา | ปรับที่ |
+|---|---|---|
+| เรียก OpenAI 1 ครั้ง | 120 วิ | `IMAGE_TIMEOUT_MS` |
+| ลองซ้ำเมื่อโดน 429 / 5xx | อีก 1 ครั้ง | `IMAGE_MAX_ATTEMPTS` |
+| Watchdog ฝั่งเซิร์ฟเวอร์ | 5 นาที | `GENERATE_WATCHDOG_MS` |
+| หน้าเว็บเลิกรอ | 6 นาที | `POLL_GIVEUP_MS` ใน `public/c.html` |
+| เพดาน background function | 15 นาที | Netlify กำหนด แก้ไม่ได้ |
+
+**หลักที่ห้ามพลาด:** ทุกเส้นทางที่ล้มเหลวต้องเขียน `status` เป็น `error` หรือ `fallback_mock` เสมอ
+ถ้าปล่อยให้ค้างที่ `processing` หน้าเว็บจะหมุนรอจนครบเวลาแล้วบอกอะไรไม่ได้เลย
 
 ---
 
@@ -159,3 +177,19 @@ SP=/tmp BASE=http://localhost:8091 ADMIN_TOKEN=test-token-123 node tests/browser
 - ยังไม่มีปุ่มลบภาพ/ลบงานในหน้า admin (ลบเองได้ที่ `data/db.json` ตอนรันเอง)
 - ยังไม่ได้สร้าง QR ให้ในตัว — ก๊อบลิงก์จากหน้า admin ไปสร้าง QR ที่ไหนก็ได้
 - หน้าจอใหญ่โชว์ 24 ภาพล่าสุด
+- **ขนาดรูปบน Netlify จำกัดราว 4MB** (ไม่ใช่ 12MB) เพราะ Netlify รับ payload ได้ ~6MB หลังเข้ารหัส base64 — ตัวเว็บย่อรูปให้เหลือ 0.5–1.5MB อยู่แล้วจึงไม่ค่อยชน
+- **OpenAI จำกัดจำนวนภาพต่อนาที** (gpt-image-2 Tier 1 = 5 ภาพ/นาที) ถ้าคนกดพร้อมกันทั้งห้อง จะโดน 429 ระบบจะลองซ้ำให้ 1 ครั้ง แต่ถ้ายังไม่ผ่านจะได้ภาพสำรอง (`fallback_mock`) — จัดเวิร์กช็อปคนเยอะควรทยอยให้กด หรือขยับ tier ของ OpenAI ก่อน
+
+### เวลามีปัญหา ให้ดูตรงไหน
+
+ทุกขั้นตอนสำคัญพ่น log เป็น JSON บรรทัดเดียวลง **Netlify → Functions → Logs** ค้นด้วยชื่อ event ได้เลย:
+
+| event | แปลว่า |
+|---|---|
+| `trigger_ok` / `trigger_failed` | api เรียก background function สำเร็จ/ไม่สำเร็จ |
+| `generate_start` / `generate_done` | background function เริ่ม/จบ (มี `ms` บอกเวลาที่ใช้จริง) |
+| `openai_ok` | OpenAI ตอบสำเร็จ (มี `ms` และ `attempt`) |
+| `openai_http_error` | OpenAI ตอบ error — ดู `status` กับ `body` จะบอกสาเหตุตรงๆ |
+| `openai_exception` | ต่อไม่ติด/หมดเวลา |
+
+ถ้าไม่เห็น `generate_start` เลย แปลว่า background function ไม่ถูกเรียก ให้ดู `trigger_failed` ในล็อกของ `api`

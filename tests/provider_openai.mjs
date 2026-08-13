@@ -20,4 +20,45 @@ r = await generateImage({ ...common, cfg: cfg(base + "/ok", "") });
 check("no key -> fallback_mock", r.status === "fallback_mock" && r.error.includes("OPENAI_API_KEY"), r.error);
 r = await generateImage({ ...common, cfg: cfg("http://127.0.0.1:1/dead") });
 check("unreachable -> fallback_mock", r.status === "fallback_mock" && isPng(r.bytes), r.error.slice(0, 60));
+
+// ---- timeout / retry behaviour -------------------------------------------
+// These guard the bug that made a broken generation look like a 15-minute hang:
+// a slow provider has to be abandoned on OUR schedule, not its own.
+let t0 = Date.now();
+r = await generateImage({
+  ...common,
+  cfg: { ...cfg(base + "/slow"), IMAGE_TIMEOUT_MS: 1500, IMAGE_MAX_ATTEMPTS: 1 },
+});
+let elapsed = Date.now() - t0;
+check("slow provider -> aborted on our timeout, not theirs",
+  r.status === "fallback_mock" && isPng(r.bytes) && elapsed < 5000,
+  `${elapsed}ms :: ${r.error.slice(0, 60)}`);
+
+t0 = Date.now();
+r = await generateImage({
+  ...common,
+  cfg: { ...cfg(base + "/429"), IMAGE_MAX_ATTEMPTS: 2, IMAGE_RETRY_BACKOFF_MS: 200 },
+});
+elapsed = Date.now() - t0;
+check("429 -> retried (honours Retry-After) then succeeds",
+  r.status === "done" && isPng(r.bytes) && elapsed >= 1000,
+  `${r.status} ${elapsed}ms ${r.error.slice(0, 60)}`);
+
+r = await generateImage({
+  ...common,
+  cfg: { ...cfg(base + "/500"), IMAGE_MAX_ATTEMPTS: 2, IMAGE_RETRY_BACKOFF_MS: 200 },
+});
+check("500 -> retried then falls back with the upstream reason",
+  r.status === "fallback_mock" && r.error.includes("500"), r.error.slice(0, 70));
+
+// 401 must NOT be retried -- the key is wrong and waiting cannot fix it.
+t0 = Date.now();
+r = await generateImage({
+  ...common,
+  cfg: { ...cfg(base + "/fail"), IMAGE_MAX_ATTEMPTS: 3, IMAGE_RETRY_BACKOFF_MS: 3000 },
+});
+elapsed = Date.now() - t0;
+check("401 -> fails fast, no pointless retries",
+  r.status === "fallback_mock" && r.error.includes("401") && elapsed < 2000, `${elapsed}ms`);
+
 process.exit(failed);

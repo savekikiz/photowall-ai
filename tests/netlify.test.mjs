@@ -33,13 +33,34 @@ store.__setStore({
 const api = (await import("../netlify/functions/api.mts")).default;
 const background = (await import("../netlify/functions/generate-background.mts")).default;
 
-// The API hands off to the background function over HTTP; in-process we just
-// call it, which is exactly what Netlify does over the wire.
+// The API hands off to the background function over HTTP. Netlify queues the
+// work and answers 202 IMMEDIATELY -- it does not wait for it. Awaiting the
+// handler here (as this stub used to) simulates the one behaviour production
+// never has, and hid the fact that a failed hand-off left submissions stuck on
+// "processing". `triggerMode` lets the tests below drive the failure paths.
+let triggerMode = "async202";
+const backgroundRuns = [];
 globalThis.fetch = async (input, init = {}) => {
   const url = typeof input === "string" ? input : (input.url || String(input));
   if (url.includes("/.netlify/functions/generate-background")) {
-    const res = await background(new Request(url, { method: "POST", body: init.body, headers: init.headers }));
-    return res;
+    if (triggerMode === "throw") throw new TypeError("fetch failed");
+    if (triggerMode === "http500") return new Response("boom", { status: 500 });
+    if (triggerMode === "hang") {
+      // A real fetch rejects when its AbortSignal fires; mimic that. The
+      // interval stands in for the open socket: AbortSignal.timeout() uses an
+      // unref'd timer, so without something holding the loop the process would
+      // simply drain before the abort ever fires.
+      return new Promise((_, reject) => {
+        const socket = setInterval(() => {}, 50);
+        init.signal?.addEventListener("abort", () => {
+          clearInterval(socket);
+          reject(init.signal.reason || new Error("aborted"));
+        });
+      });
+    }
+    const run = background(new Request(url, { method: "POST", body: init.body, headers: init.headers }));
+    backgroundRuns.push(run.catch(() => {}));
+    return new Response("", { status: 202 });
   }
   throw new Error("unexpected fetch to " + url);
 };
@@ -137,5 +158,52 @@ const { THEMES } = await import("../netlify/lib/themes.mjs");
 check("themes.mjs in sync with themes.json (>=6 themes)",
   JSON.stringify(jsonThemes) === JSON.stringify(THEMES) && THEMES.length >= 6,
   `${jsonThemes.length} vs ${THEMES.length}`);
+
+// ---- hand-off failures must be terminal, and fast --------------------------
+// This is the regression that mattered: when the trigger failed the code wrote
+// `error` but left `status: "processing"`, so the browser polled until its own
+// giveup timer fired. A wrong env var became "wait 15 minutes, get a vague
+// message". Every failure mode below must land on a terminal status instead.
+const { BUDGET } = await import("../netlify/lib/core.mjs");
+
+async function submitAndRead(mode) {
+  triggerMode = mode;
+  const started = Date.now();
+  const res = await jpost("/api/submissions", {
+    campaign_slug: "workshop-12", student_name: "trigger-" + mode,
+    learnings: ["x"], commitments: ["y"], theme_id: "street-flash", photoData: photo,
+  });
+  const body = await res.json();
+  const sub = await (await call(`/api/submissions/${body.id}`)).json();
+  triggerMode = "async202";
+  return { httpStatus: res.status, sub, ms: Date.now() - started };
+}
+
+let t = await submitAndRead("throw");
+check("trigger throws -> submission ends at status=error (not stuck processing)",
+  t.httpStatus === 201 && t.sub.status === "error" && /ไม่สำเร็จ/.test(t.sub.error),
+  `${t.sub.status} :: ${t.sub.error}`);
+
+t = await submitAndRead("http500");
+check("trigger 500 -> status=error carrying the HTTP code",
+  t.sub.status === "error" && t.sub.error.includes("500"), `${t.sub.status} :: ${t.sub.error}`);
+
+BUDGET.TRIGGER_TIMEOUT_MS = 400; // keep the test quick; production uses 8s
+t = await submitAndRead("hang");
+check("trigger hangs -> aborted and marked error quickly",
+  t.sub.status === "error" && t.ms < 3000, `${t.sub.status} in ${t.ms}ms :: ${t.sub.error}`);
+BUDGET.TRIGGER_TIMEOUT_MS = 8000;
+
+// A caller must never be able to push a body past the platform's payload cap.
+const huge = "data:image/png;base64," + "A".repeat(9 * 1024 * 1024);
+r = await call("/api/submissions", {
+  method: "POST",
+  headers: { "content-type": "application/json", "content-length": String(huge.length + 200) },
+  body: JSON.stringify({ campaign_slug: "workshop-12", learnings: ["x"], commitments: ["y"],
+    theme_id: "street-flash", photoData: huge }),
+});
+check("oversized body -> 413 before parsing", r.status === 413, String(r.status));
+
+await Promise.all(backgroundRuns);
 
 process.exit(failed);

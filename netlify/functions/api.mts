@@ -3,7 +3,7 @@
 import * as store from "../lib/storage.mjs";
 import {
   THEMES, themeById, config as envConfig, slugify, decodePhoto, PhotoError,
-  json, cleanList, publicSub,
+  json, cleanList, publicSub, BUDGET, MAX_BODY_BYTES, logEvent,
 } from "../lib/core.mjs";
 
 export default async (req: Request) => {
@@ -88,6 +88,14 @@ function adminOk(req: Request, cfg: any) {
 }
 
 async function createSubmission(req: Request, cfg: any) {
+  // Reject oversized uploads before parsing: past ~6MB of base64 the platform
+  // drops the request itself, and the user gets an opaque platform error
+  // instead of an explanation they can act on.
+  const declared = Number(req.headers.get("content-length") || 0);
+  if (declared > MAX_BODY_BYTES) {
+    return json(413, { error: "รูปใหญ่เกินไปสำหรับเซิร์ฟเวอร์ (จำกัดราว 4MB) ลองถ่ายใหม่หรือย่อรูปก่อน" });
+  }
+
   const body = await req.json().catch(() => ({}));
   const slug = (body.campaign_slug || "").trim();
   const campaign = await store.getCampaign(slug);
@@ -122,21 +130,37 @@ async function createSubmission(req: Request, cfg: any) {
   await store.addSubmission(sub);
 
   // Hand off to the background function (up to 15 min) and answer immediately.
-  const target = new URL("/.netlify/functions/generate-background", cfg.PUBLIC_BASE_URL || req.url);
+  // Deliberately NOT PUBLIC_BASE_URL: this is a self-invocation, so it is on
+  // this exact host by definition. Deriving it from a hand-entered env var only
+  // adds a way for a typo (or a copied localhost value) to take generation down
+  // site-wide, which is invisible until someone waits out the whole poll window.
+  const target = new URL("/.netlify/functions/generate-background", req.url);
   try {
     const r = await fetch(target, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ id }),
+      signal: AbortSignal.timeout(BUDGET.TRIGGER_TIMEOUT_MS),
     });
     if (!r.ok && r.status !== 202) {
-      await store.updateSubmission(id, { error: `trigger HTTP ${r.status}` });
+      await failSubmission(id, `เรียกตัวสร้างภาพไม่สำเร็จ (HTTP ${r.status})`);
+    } else {
+      logEvent("trigger_ok", { sub: id, status: r.status });
     }
   } catch (e: any) {
-    await store.updateSubmission(id, { error: `trigger failed: ${e.message}` });
+    await failSubmission(id, `เรียกตัวสร้างภาพไม่สำเร็จ: ${e.name}: ${e.message}`);
   }
 
   return json(201, { id, status: "processing", pollUrl: `/api/submissions/${id}` });
+}
+
+/** A failed hand-off must set `status`, not just `error`. Writing only `error`
+ *  leaves the record at "processing" forever, so the browser keeps polling
+ *  until its own giveup timer fires and reports a generic timeout -- turning a
+ *  fault we already understood into a long wait and a useless message. */
+async function failSubmission(id: string, error: string) {
+  logEvent("trigger_failed", { sub: id, error });
+  await store.updateSubmission(id, { status: "error", error });
 }
 
 export const config = { path: ["/healthz", "/api/*", "/media/*"] };

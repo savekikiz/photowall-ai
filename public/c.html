@@ -54,6 +54,7 @@
       <div class="spinner"></div>
       <b>กำลังสร้างภาพ…</b>
       <p class="muted">ใช้เวลาประมาณ 30 ถึง 120 วินาที อย่าปิดหน้านี้<br><span id="elapsed">0</span> วินาที</p>
+      <p class="muted" id="working-note" style="color:var(--warn)"></p>
     </div>
 
     <div class="card" id="result" hidden style="text-align:center">
@@ -166,31 +167,57 @@ $('form').onsubmit = async e => {
   let r, data;
   try {
     r = await fetch('/api/submissions', {
-      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload)
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(90000)
     });
     data = await r.json();
   } catch (err) {
     $('submit').disabled = false;
-    return showErr('ส่งข้อมูลไม่สำเร็จ: ' + err.message);
+    return showErr(err.name === 'TimeoutError'
+      ? 'อัปโหลดนานเกินไป สัญญาณอาจไม่ดี ลองใหม่อีกครั้ง'
+      : 'ส่งข้อมูลไม่สำเร็จ: ' + err.message);
   }
   if (!r.ok) { $('submit').disabled = false; return showErr(data.error || ('ผิดพลาด ' + r.status)); }
 
   $('form').hidden = true;
   $('working').hidden = false;
+  $('working-note').textContent = '';
   let sec = 0;
   tick = setInterval(() => { sec += 1; $('elapsed').textContent = sec; }, 1000);
   poll(data.id);
 };
 
+// Longer than the server's 5-minute watchdog, so we read a real terminal status
+// instead of guessing. Every exit path below is reachable even when the network
+// is down -- the giveup checks sit outside the try on purpose.
+const POLL_GIVEUP_MS = 6 * 60 * 1000;
+const POLL_MAX_CONSECUTIVE_ERRORS = 10;
+
 function poll(id){
   const started = Date.now();
+  let misses = 0;
   pollTimer = setInterval(async () => {
+    let s = null;
     try {
-      const s = await (await fetch('/api/submissions/' + id)).json();
+      const r = await fetch('/api/submissions/' + id, { cache: 'no-store' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      s = await r.json();
+      misses = 0;
+    } catch (e) {
+      misses++;
+    }
+
+    if (s) {
       if (s.status === 'done' || s.status === 'fallback_mock') return finish(s);
       if (s.status === 'error') return fail(s.error || 'สร้างภาพไม่สำเร็จ');
-      if (Date.now() - started > 15 * 60 * 1000) return fail('ใช้เวลานานผิดปกติ ลองใหม่อีกครั้ง');
-    } catch (e) { /* keep polling through a blip */ }
+      // Surface a problem the server already recorded while still processing,
+      // rather than hiding it until the whole wait is over.
+      if (s.error) $('working-note').textContent = s.error;
+    }
+    if (misses >= POLL_MAX_CONSECUTIVE_ERRORS)
+      return fail('เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ ตรวจสอบอินเทอร์เน็ตแล้วลองใหม่');
+    if (Date.now() - started > POLL_GIVEUP_MS)
+      return fail('ใช้เวลานานผิดปกติ ลองใหม่อีกครั้ง');
   }, 3000);
 }
 

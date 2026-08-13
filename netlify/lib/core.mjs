@@ -14,9 +14,33 @@ export const config = () => ({
   IMAGE_MODEL: process.env.IMAGE_MODEL || "gpt-image-2",
   IMAGE_SIZE: process.env.IMAGE_SIZE || "1024x1536",
   IMAGE_QUALITY: process.env.IMAGE_QUALITY || "medium",
+  // Per-attempt budget for the OpenAI call. Must stay well under the
+  // background function's 15-minute ceiling -- see BUDGET below.
+  IMAGE_TIMEOUT_MS: Number(process.env.IMAGE_TIMEOUT_MS) || 120000,
+  IMAGE_MAX_ATTEMPTS: Number(process.env.IMAGE_MAX_ATTEMPTS) || 2,
+  IMAGE_RETRY_BACKOFF_MS: Number(process.env.IMAGE_RETRY_BACKOFF_MS) || 10000,
   // only for testing against a stub; leave unset in production
   OPENAI_BASE_URL: process.env.OPENAI_BASE_URL || "https://api.openai.com/v1",
 });
+
+// Timeouts have to nest, longest last, or a failure inside a short budget gets
+// reported by an outer layer that has no idea what actually went wrong:
+//   OpenAI attempt 120s x2 + 10s backoff = ~4.2min
+//   < background watchdog 5min  (always writes a terminal status)
+//   < browser poll giveup 6min  (so the browser reads a real status, never guesses)
+//   < Netlify background ceiling 15min
+export const BUDGET = {
+  WATCHDOG_MS: Number(process.env.GENERATE_WATCHDOG_MS) || 5 * 60 * 1000,
+  RETRY_BACKOFF_MS: 10000,
+  RETRY_BACKOFF_MAX_MS: 60000,
+  TRIGGER_TIMEOUT_MS: 8000,
+};
+
+/** One JSON line per event -- greppable in the Netlify function log. */
+export function logEvent(event, fields = {}) {
+  try { console.log(JSON.stringify({ event, ...fields })); }
+  catch { console.log(event); }
+}
 
 export const slugify = (v) =>
   (v || "").trim().toLowerCase()
@@ -25,7 +49,12 @@ export const slugify = (v) =>
 
 // ------------------------------------------------------------ photo checks
 const MIN_BYTES = 1024;
-const MAX_BYTES = 12 * 1024 * 1024;
+// Netlify/Lambda caps a synchronous function's request payload at ~6MB *after*
+// base64 encoding, so anything over ~4.4MB decoded is rejected by the platform
+// before our code ever runs -- the old 12MB ceiling could never be reached and
+// the friendly Thai error below could never be shown. Keep this under the wire.
+const MAX_BYTES = 4 * 1024 * 1024;
+export const MAX_BODY_BYTES = Math.round(MAX_BYTES * 4 / 3) + 64 * 1024; // base64 + JSON overhead
 const ALLOWED = ["image/png", "image/jpeg", "image/jpg", "image/webp"];
 
 export class PhotoError extends Error {}
@@ -43,7 +72,7 @@ export function decodePhoto(photoData) {
   try { bytes = Buffer.from(m[2], "base64"); }
   catch { throw new PhotoError("ถอดรหัสรูปไม่สำเร็จ ไฟล์อาจเสียหาย"); }
   if (bytes.length < MIN_BYTES) throw new PhotoError("ไฟล์รูปเล็กเกินไป (ต้องมากกว่า 1KB)");
-  if (bytes.length > MAX_BYTES) throw new PhotoError("ไฟล์รูปใหญ่เกินไป (ต้องไม่เกิน 12MB)");
+  if (bytes.length > MAX_BYTES) throw new PhotoError("ไฟล์รูปใหญ่เกินไป (ต้องไม่เกิน 4MB)");
   const ext = sniff(bytes);
   if (!ext) throw new PhotoError("ไฟล์ที่ส่งมาไม่ใช่รูปภาพจริง");
   return { bytes, ext, mime: mimeFor(ext) };
@@ -108,34 +137,77 @@ export async function generateImage({ photoBytes, photoExt, campaign, theme, sub
   if (cfg.IMAGE_PROVIDER === "mock") return mock("");
   if (!cfg.OPENAI_API_KEY) return mock("ไม่พบ OPENAI_API_KEY จึงใช้รูป mock แทน");
 
-  try {
-    const form = new FormData();
-    form.append("model", cfg.IMAGE_MODEL);
-    form.append("prompt", buildPrompt(campaign?.title, theme?.prompt, sub.student_name, sub.learnings, sub.commitments));
-    form.append("size", cfg.IMAGE_SIZE);
-    form.append("quality", cfg.IMAGE_QUALITY);
-    form.append("n", "1");
-    form.append("image", new Blob([photoBytes], { type: mimeFor(photoExt) }), `photo.${photoExt}`);
+  const endpoint = cfg.OPENAI_BASE_URL.replace(/\/$/, "") + "/images/edits";
+  const timeoutMs = Number(cfg.IMAGE_TIMEOUT_MS) || 120000;
+  const attempts = Math.max(1, Number(cfg.IMAGE_MAX_ATTEMPTS) || 1);
+  let lastErr = "เรียก OpenAI ไม่สำเร็จ";
 
-    const res = await fetch(cfg.OPENAI_BASE_URL.replace(/\/$/, "") + "/images/edits", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${cfg.OPENAI_API_KEY}` },
-      body: form,
-      signal: AbortSignal.timeout(13 * 60 * 1000),
-    });
-    if (!res.ok) return mock(`OpenAI HTTP ${res.status}: ${(await res.text()).slice(0, 400)}`);
-    const payload = await res.json();
-    const item = payload?.data?.[0] || {};
-    if (item.b64_json) return { bytes: Buffer.from(item.b64_json, "base64"), status: "done", error: "" };
-    if (item.url) {
-      const img = await fetch(item.url);
-      if (!img.ok) return mock(`ดาวน์โหลดรูปจาก OpenAI ไม่สำเร็จ (HTTP ${img.status})`);
-      return { bytes: Buffer.from(await img.arrayBuffer()), status: "done", error: "" };
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const started = Date.now();
+    try {
+      // Rebuilt every attempt: a FormData carrying a Blob is not safely reusable
+      // once its stream has been consumed by a failed send.
+      const form = new FormData();
+      form.append("model", cfg.IMAGE_MODEL);
+      form.append("prompt", buildPrompt(campaign?.title, theme?.prompt, sub.student_name, sub.learnings, sub.commitments));
+      form.append("size", cfg.IMAGE_SIZE);
+      form.append("quality", cfg.IMAGE_QUALITY);
+      form.append("n", "1");
+      form.append("image", new Blob([photoBytes], { type: mimeFor(photoExt) }), `photo.${photoExt}`);
+
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${cfg.OPENAI_API_KEY}` },
+        body: form,
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      const ms = Date.now() - started;
+
+      if (res.ok) {
+        const payload = await res.json();
+        const item = payload?.data?.[0] || {};
+        if (item.b64_json) {
+          logEvent("openai_ok", { sub: sub.id, attempt, ms, via: "b64_json" });
+          return { bytes: Buffer.from(item.b64_json, "base64"), status: "done", error: "" };
+        }
+        if (item.url) {
+          const img = await fetch(item.url, { signal: AbortSignal.timeout(60000) });
+          if (!img.ok) return mock(`ดาวน์โหลดรูปจาก OpenAI ไม่สำเร็จ (HTTP ${img.status})`);
+          logEvent("openai_ok", { sub: sub.id, attempt, ms: Date.now() - started, via: "url" });
+          return { bytes: Buffer.from(await img.arrayBuffer()), status: "done", error: "" };
+        }
+        return mock("OpenAI response had neither b64_json nor url");
+      }
+
+      const body = (await res.text().catch(() => "")).slice(0, 400);
+      lastErr = `OpenAI HTTP ${res.status}: ${body}`;
+      logEvent("openai_http_error", { sub: sub.id, attempt, ms, status: res.status, body });
+
+      // 400/401/403 mean the key, model or params are wrong -- retrying burns
+      // the budget and changes nothing. Only 429 and 5xx are worth another go.
+      const retryable = res.status === 429 || res.status >= 500;
+      if (!retryable || attempt === attempts) return mock(lastErr);
+      await sleep(backoffMs(res, attempt, cfg));
+    } catch (e) {
+      const ms = Date.now() - started;
+      lastErr = `${e.name}: ${e.message}`;
+      logEvent("openai_exception", { sub: sub.id, attempt, ms, error: lastErr });
+      if (attempt === attempts) return mock(lastErr);
+      await sleep(backoffMs(null, attempt, cfg));
     }
-    return mock("OpenAI response had neither b64_json nor url");
-  } catch (e) {
-    return mock(`${e.name}: ${e.message}`);
   }
+  return mock(lastErr);
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Honour Retry-After when OpenAI sends one, but never let it eat the budget. */
+function backoffMs(res, attempt, cfg = {}) {
+  const header = Number(res?.headers?.get?.("retry-after"));
+  if (Number.isFinite(header) && header > 0)
+    return Math.min(header * 1000, BUDGET.RETRY_BACKOFF_MAX_MS);
+  const base = Number(cfg.IMAGE_RETRY_BACKOFF_MS) || BUDGET.RETRY_BACKOFF_MS;
+  return Math.min(base * attempt, BUDGET.RETRY_BACKOFF_MAX_MS);
 }
 
 // ------------------------------------------------------------------ utils
