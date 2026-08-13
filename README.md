@@ -67,7 +67,15 @@ docker compose up --build
    | `PUBLIC_BASE_URL` | URL ของเว็บคุณ เช่น `https://ชื่อเว็บ.netlify.app` (ใส่ผิดไม่ทำให้สร้างภาพพังแล้ว) |
 
 5. กด **Deploys → Trigger deploy → Deploy site** อีกครั้ง เพื่อให้ค่าใหม่มีผล
-6. เปิด `https://ชื่อเว็บ.netlify.app/healthz` ต้องเห็น `"ok": true` และ `"has_openai_key": true`
+6. เปิด `https://ชื่อเว็บ.netlify.app/healthz?probe=1` ต้องเห็น `"ok": true`, `"has_openai_key": true`
+   และ `"trigger": {"ok": true}` — ตัวสุดท้ายคือการทดสอบจริงว่า api เรียกตัวสร้างภาพได้ไหม
+   **ถ้า `trigger.ok` เป็น `false` อย่าเพิ่งเริ่มงาน** เพราะอัปรูปไปก็จะไม่มีภาพออกมา (ดูหัวข้อถัดไป)
+
+> ⚠️ **ห้ามเปิด password protection**
+> ถ้าเปิด Netlify → Site configuration → Access & security → Visitor access ไว้
+> ทุก request ที่ไม่มี session ของเบราว์เซอร์จะโดน **401** รวมถึงตอนที่ api เรียก
+> background function ผ่าน URL ของเว็บตัวเอง → สร้างภาพไม่ได้เลย
+> และงานนี้ต้องเปิดสาธารณะอยู่แล้ว เพราะผู้เข้าร่วมสแกน QR เข้ามาโดยไม่มีรหัส
 7. เปิด `/admin` ใส่รหัสผู้ดูแล → สร้างงาน → เอาลิงก์ `/c/<ชื่องาน>` ไปทำ QR (เช่นที่ qr-code-generator.com)
 
 **Netlify Blobs เปิดใช้อัตโนมัติ** ไม่ต้องสมัครบริการเพิ่ม ไม่ต้องตั้งค่าอะไร ข้อมูลกับรูปอยู่ข้าม deploy
@@ -178,6 +186,7 @@ SP=/tmp BASE=http://localhost:8091 ADMIN_TOKEN=test-token-123 node tests/browser
 - ยังไม่ได้สร้าง QR ให้ในตัว — ก๊อบลิงก์จากหน้า admin ไปสร้าง QR ที่ไหนก็ได้
 - หน้าจอใหญ่โชว์ 24 ภาพล่าสุด
 - **ขนาดรูปบน Netlify จำกัดราว 4MB** (ไม่ใช่ 12MB) เพราะ Netlify รับ payload ได้ ~6MB หลังเข้ารหัส base64 — ตัวเว็บย่อรูปให้เหลือ 0.5–1.5MB อยู่แล้วจึงไม่ค่อยชน
+- **เปิด password protection ไม่ได้** — จะทำให้สร้างภาพไม่ได้ทั้งระบบ (401) และผู้เข้าร่วมก็สแกน QR เข้าไม่ได้อยู่ดี ตรวจก่อนงานด้วย `/healthz?probe=1`
 - **OpenAI จำกัดจำนวนภาพต่อนาที** (gpt-image-2 Tier 1 = 5 ภาพ/นาที) ถ้าคนกดพร้อมกันทั้งห้อง จะโดน 429 ระบบจะลองซ้ำให้ 1 ครั้ง แต่ถ้ายังไม่ผ่านจะได้ภาพสำรอง (`fallback_mock`) — จัดเวิร์กช็อปคนเยอะควรทยอยให้กด หรือขยับ tier ของ OpenAI ก่อน
 
 ### เวลามีปัญหา ให้ดูตรงไหน
@@ -187,6 +196,7 @@ SP=/tmp BASE=http://localhost:8091 ADMIN_TOKEN=test-token-123 node tests/browser
 | event | แปลว่า |
 |---|---|
 | `trigger_ok` / `trigger_failed` | api เรียก background function สำเร็จ/ไม่สำเร็จ |
+| `trigger_http_error` | ปลายทางตอบ error — ถ้า `blocked: true` แปลว่าโดน password protection กั้น |
 | `generate_start` / `generate_done` | background function เริ่ม/จบ (มี `ms` บอกเวลาที่ใช้จริง) |
 | `openai_ok` | OpenAI ตอบสำเร็จ (มี `ms` และ `attempt`) |
 | `openai_http_error` | OpenAI ตอบ error — ดู `status` กับ `body` จะบอกสาเหตุตรงๆ |

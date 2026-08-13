@@ -45,6 +45,10 @@ globalThis.fetch = async (input, init = {}) => {
   if (url.includes("/.netlify/functions/generate-background")) {
     if (triggerMode === "throw") throw new TypeError("fetch failed");
     if (triggerMode === "http500") return new Response("boom", { status: 500 });
+    // Site-wide password protection answers 401 to anything without a browser
+    // session -- including this function calling its own site.
+    if (triggerMode === "edge401")
+      return new Response("<html>password required</html>", { status: 401 });
     if (triggerMode === "hang") {
       // A real fetch rejects when its AbortSignal fires; mimic that. The
       // interval stands in for the open socket: AbortSignal.timeout() uses an
@@ -193,6 +197,24 @@ t = await submitAndRead("hang");
 check("trigger hangs -> aborted and marked error quickly",
   t.sub.status === "error" && t.ms < 3000, `${t.sub.status} in ${t.ms}ms :: ${t.sub.error}`);
 BUDGET.TRIGGER_TIMEOUT_MS = 8000;
+
+t = await submitAndRead("edge401");
+check("trigger 401 -> names password protection instead of a bare status code",
+  t.sub.status === "error" && /password protection/.test(t.sub.error)
+    && /Access & security/.test(t.sub.error),
+  `${t.sub.status} :: ${t.sub.error.slice(0, 80)}`);
+
+// The preflight has to actually exercise the hand-off, or it is just decoration.
+triggerMode = "edge401";
+d = await (await call("/healthz?probe=1")).json();
+check("healthz?probe=1 reports the hand-off as blocked",
+  d.trigger && d.trigger.ok === false && d.trigger.status === 401, JSON.stringify(d.trigger));
+triggerMode = "async202";
+d = await (await call("/healthz?probe=1")).json();
+check("healthz?probe=1 reports OK when the hand-off works",
+  d.trigger && d.trigger.ok === true, JSON.stringify(d.trigger));
+d = await (await call("/healthz")).json();
+check("healthz without probe does not run the hand-off", d.trigger === undefined, JSON.stringify(d.trigger));
 
 // A caller must never be able to push a body past the platform's payload cap.
 const huge = "data:image/png;base64," + "A".repeat(9 * 1024 * 1024);

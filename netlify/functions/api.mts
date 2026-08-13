@@ -14,11 +14,19 @@ export default async (req: Request) => {
   try {
     if (path === "/healthz") {
       const c = await store.counts();
+      // /healthz?probe=1 also checks that this function can actually reach the
+      // background function. Opt-in because it queues a no-op invocation, and
+      // because a green healthz that never tested the hand-off is how a site
+      // ends up looking fine right up until the first real upload.
+      const probe = url.searchParams.get("probe") === "1"
+        ? await probeTrigger(req)
+        : undefined;
       return json(200, {
         ok: true, storage: "netlify-blobs",
         image_provider: cfg.IMAGE_PROVIDER,
         has_openai_key: Boolean(cfg.OPENAI_API_KEY),
         admin_token_set: Boolean(cfg.ADMIN_TOKEN),
+        ...(probe ? { trigger: probe } : {}),
         ...c, time: store.nowIso(),
       });
     }
@@ -134,24 +142,55 @@ async function createSubmission(req: Request, cfg: any) {
   // this exact host by definition. Deriving it from a hand-entered env var only
   // adds a way for a typo (or a copied localhost value) to take generation down
   // site-wide, which is invisible until someone waits out the whole poll window.
-  const target = new URL("/.netlify/functions/generate-background", req.url);
+  const t = await callTrigger(req, { id });
+  if (t.ok) logEvent("trigger_ok", { sub: id, status: t.status });
+  else await failSubmission(id, t.message);
+
+  return json(201, { id, status: "processing", pollUrl: `/api/submissions/${id}` });
+}
+
+const TRIGGER_PATH = "/.netlify/functions/generate-background";
+
+/** Site-wide password protection / team-login sits in front of every path on
+ *  the domain, functions included. This request carries no browser session, so
+ *  a protected site answers 401 (or 403) here even though the code is fine --
+ *  the site is simply closed to anything that is not a logged-in browser. */
+const EDGE_BLOCKED =
+  "เว็บเปิด password protection อยู่ ระบบจึงเรียกตัวสร้างภาพไม่ได้ " +
+  "ให้ปิดที่ Netlify → Site configuration → Access & security → Visitor access " +
+  "(งานนี้ต้องเปิดเป็นสาธารณะอยู่แล้ว เพราะผู้เข้าร่วมสแกน QR เข้ามาเอง)";
+
+async function callTrigger(req: Request, payload: any) {
+  const target = new URL(TRIGGER_PATH, req.url);
   try {
     const r = await fetch(target, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ id }),
+      body: JSON.stringify(payload),
       signal: AbortSignal.timeout(BUDGET.TRIGGER_TIMEOUT_MS),
     });
-    if (!r.ok && r.status !== 202) {
-      await failSubmission(id, `เรียกตัวสร้างภาพไม่สำเร็จ (HTTP ${r.status})`);
-    } else {
-      logEvent("trigger_ok", { sub: id, status: r.status });
-    }
-  } catch (e: any) {
-    await failSubmission(id, `เรียกตัวสร้างภาพไม่สำเร็จ: ${e.name}: ${e.message}`);
-  }
+    if (r.ok || r.status === 202) return { ok: true, status: r.status, message: "" };
 
-  return json(201, { id, status: "processing", pollUrl: `/api/submissions/${id}` });
+    const body = (await r.text().catch(() => "")).slice(0, 200);
+    const blocked = r.status === 401 || r.status === 403;
+    logEvent("trigger_http_error", { status: r.status, blocked, body });
+    return {
+      ok: false,
+      status: r.status,
+      message: blocked ? EDGE_BLOCKED : `เรียกตัวสร้างภาพไม่สำเร็จ (HTTP ${r.status})`,
+    };
+  } catch (e: any) {
+    return { ok: false, status: 0, message: `เรียกตัวสร้างภาพไม่สำเร็จ: ${e.name}: ${e.message}` };
+  }
+}
+
+/** Same hand-off, no submission attached: a background function answers 202 to
+ *  any POST, and the handler rejects the empty body without touching storage. */
+async function probeTrigger(req: Request) {
+  const t = await callTrigger(req, {});
+  return t.ok
+    ? { ok: true, status: t.status, hint: "เรียกตัวสร้างภาพได้ปกติ" }
+    : { ok: false, status: t.status, hint: t.message };
 }
 
 /** A failed hand-off must set `status`, not just `error`. Writing only `error`
